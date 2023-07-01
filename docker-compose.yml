@@ -1,0 +1,35 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:13.3
+    
+    environment:
+      POSTGRES_DB: "testdb"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    
+    volumes:
+      - .:/docker-entrypoint-initdb.d
+      - testdb-data:/var/lib/postgresql/data
+    
+    ports:
+      - "5432:5432"
+
+    networks:
+      - postgres
+
+  nats-jetstream:
+    image: nats
+    command: --jetstream
+    ports:
+      - 4222:4222
+    networks:
+      - postgres
+
+volumes:
+  testdb-data:
+
+networks:
+  postgres:
+    driver: bridge
