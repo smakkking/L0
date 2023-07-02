@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 
 	_ "github.com/lib/pq"
 	"github.com/nats-io/nats.go"
@@ -13,22 +16,26 @@ import (
 
 var Cache = make(map[string]Order)
 
-func main() {
-	// создание + инициализация объекта БД
+func initDB() (*sql.DB, error) {
 	db, err := sql.Open("postgres", "host=localhost dbname=testdb user=postgres password=postgres sslmode=disable")
 	if err != nil {
 		log.Fatalf("cant connect to db")
-		return
+		return nil, err
 	}
 
 	err = db.Ping()
 	if err != nil {
 		log.Fatalf("cant connect to db")
-		return
+		return nil, err
 	}
 
-	// восстановление кэша из БД
+	return db, nil
+}
+
+func cacheInit(db *sql.DB) {
 	rows, _ := db.Query("select * from WB_Order")
+	defer rows.Close()
+
 	for rows.Next() {
 		var curr_order Order
 
@@ -70,18 +77,16 @@ func main() {
 
 		Cache[curr_order.OrderUID] = curr_order
 	}
-	rows.Close()
 
-	// подписка на канал JetStream
-	nc, _ := nats.Connect(nats.DefaultURL)
+}
+
+func JetStreamSet(nc *nats.Conn, db *sql.DB) {
 	js, _ := nc.JetStream()
 
 	js.AddStream(&nats.StreamConfig{
 		Name:     "ORDERS",
 		Subjects: []string{"ORDERS.*"},
 	})
-
-	defer nc.Close()
 
 	js.Subscribe("ORDERS.*", func(m *nats.Msg) {
 		// здесь нужно будет обрабатывать получение данных
@@ -94,7 +99,10 @@ func main() {
 		} else {
 			log.Println("data added successfully")
 		}
-
+		_, ok := Cache[curr_order.OrderUID]
+		if ok {
+			return
+		}
 		Cache[curr_order.OrderUID] = curr_order
 
 		stmt, err := db.Prepare("INSERT INTO WB_Order VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)")
@@ -139,8 +147,9 @@ func main() {
 			log.Fatal(err)
 		}
 	}, nats.Durable("uniqueApp"))
+}
 
-	// создание http server
+func HTTPServerInit() http.Server {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `<h1>Введите данные UID <h1> <form action="/get"><label for="fname">UID:</label><br><input type="text" id="uid" name="uid"><br><br><input type="submit" value="Получить"></form> `)
 
@@ -157,6 +166,48 @@ func main() {
 			fmt.Fprintf(w, "<h1> No such UID <h1>")
 		}
 	})
-	http.ListenAndServe(":8080", nil)
 
+	httpServer := http.Server{
+		Addr: ":8080",
+	}
+
+	return httpServer
+}
+
+func main() {
+	// создание + инициализация объекта БД
+	db, err := initDB()
+	if err != nil {
+		return
+	}
+
+	// восстановление кэша из БД
+	cacheInit(db)
+
+	// подписка на канал JetStream
+	nc, _ := nats.Connect(nats.DefaultURL)
+	defer nc.Close()
+	JetStreamSet(nc, db)
+
+	// создание http server
+	httpServer := HTTPServerInit()
+
+	//graceful shutdown
+	idleConnectionsClosed := make(chan struct{})
+	go func() {
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt)
+		<-sigint
+		if err := httpServer.Shutdown(context.Background()); err != nil {
+			log.Printf("HTTP Server Shutdown Error: %v", err)
+		}
+		close(idleConnectionsClosed)
+	}()
+
+	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatalf("HTTP server ListenAndServe Error: %v", err)
+	}
+
+	<-idleConnectionsClosed
+	log.Printf("\nBye bye")
 }
