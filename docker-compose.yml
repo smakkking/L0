@@ -2,6 +2,7 @@ version: "3.9"
 services:
   postgres:
     image: postgres:13.3
+    container_name:  my_postgres
     
     environment:
       POSTGRES_DB: "testdb"
@@ -21,6 +22,7 @@ services:
 
   nats-jetstream:
     image: nats
+    container_name: ny_nats_js
     command: --jetstream
     ports:
       - 4222:4222

@@ -89,11 +89,10 @@ func main() {
 
 		err := json.Unmarshal(m.Data, &curr_order) // данный код отсекает все невалидные данные.
 		if err != nil {
-			log.Println("data ingored")
-			log.Println(string(m.Data))
+			log.Println("invalid data ingored")
 			return
 		} else {
-			log.Println("data inserted")
+			log.Println("data added successfully")
 		}
 
 		Cache[curr_order.OrderUID] = curr_order
